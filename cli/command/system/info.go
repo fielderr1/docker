@@ -2,20 +2,20 @@ package system
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
-
-	"golang.org/x/net/context"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/cli"
 	"github.com/docker/docker/cli/command"
+	"github.com/docker/docker/cli/debug"
 	"github.com/docker/docker/pkg/ioutils"
-	"github.com/docker/docker/utils"
-	"github.com/docker/docker/utils/templates"
+	"github.com/docker/docker/pkg/templates"
 	"github.com/docker/go-units"
 	"github.com/spf13/cobra"
+	"golang.org/x/net/context"
 )
 
 type infoOptions struct {
@@ -37,7 +37,7 @@ func NewInfoCommand(dockerCli *command.DockerCli) *cobra.Command {
 
 	flags := cmd.Flags()
 
-	flags.StringVarP(&opts.format, "format", "f", "", "Format the output using the given go template")
+	flags.StringVarP(&opts.format, "format", "f", "", "Format the output using the given Go template")
 
 	return cmd
 }
@@ -65,11 +65,6 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 	if info.DriverStatus != nil {
 		for _, pair := range info.DriverStatus {
 			fmt.Fprintf(dockerCli.Out(), " %s: %s\n", pair[0], pair[1])
-
-			// print a warning if devicemapper is using a loopback file
-			if pair[0] == "Data loop file" {
-				fmt.Fprintln(dockerCli.Err(), " WARNING: Usage of loopback devices is strongly discouraged for production use. Use `--storage-opt dm.thinpooldev` to specify a custom block storage device.")
-			}
 		}
 
 	}
@@ -96,20 +91,27 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 	}
 
 	fmt.Fprintf(dockerCli.Out(), "Swarm: %v\n", info.Swarm.LocalNodeState)
-	if info.Swarm.LocalNodeState != swarm.LocalNodeStateInactive {
+	if info.Swarm.LocalNodeState != swarm.LocalNodeStateInactive && info.Swarm.LocalNodeState != swarm.LocalNodeStateLocked {
 		fmt.Fprintf(dockerCli.Out(), " NodeID: %s\n", info.Swarm.NodeID)
 		if info.Swarm.Error != "" {
 			fmt.Fprintf(dockerCli.Out(), " Error: %v\n", info.Swarm.Error)
 		}
 		fmt.Fprintf(dockerCli.Out(), " Is Manager: %v\n", info.Swarm.ControlAvailable)
-		if info.Swarm.ControlAvailable {
+		if info.Swarm.Cluster != nil && info.Swarm.ControlAvailable && info.Swarm.Error == "" && info.Swarm.LocalNodeState != swarm.LocalNodeStateError {
 			fmt.Fprintf(dockerCli.Out(), " ClusterID: %s\n", info.Swarm.Cluster.ID)
 			fmt.Fprintf(dockerCli.Out(), " Managers: %d\n", info.Swarm.Managers)
 			fmt.Fprintf(dockerCli.Out(), " Nodes: %d\n", info.Swarm.Nodes)
 			fmt.Fprintf(dockerCli.Out(), " Orchestration:\n")
-			fmt.Fprintf(dockerCli.Out(), "  Task History Retention Limit: %d\n", info.Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit)
+			taskHistoryRetentionLimit := int64(0)
+			if info.Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit != nil {
+				taskHistoryRetentionLimit = *info.Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit
+			}
+			fmt.Fprintf(dockerCli.Out(), "  Task History Retention Limit: %d\n", taskHistoryRetentionLimit)
 			fmt.Fprintf(dockerCli.Out(), " Raft:\n")
 			fmt.Fprintf(dockerCli.Out(), "  Snapshot Interval: %d\n", info.Swarm.Cluster.Spec.Raft.SnapshotInterval)
+			if info.Swarm.Cluster.Spec.Raft.KeepOldSnapshots != nil {
+				fmt.Fprintf(dockerCli.Out(), "  Number of Old Snapshots to Retain: %d\n", *info.Swarm.Cluster.Spec.Raft.KeepOldSnapshots)
+			}
 			fmt.Fprintf(dockerCli.Out(), "  Heartbeat Tick: %d\n", info.Swarm.Cluster.Spec.Raft.HeartbeatTick)
 			fmt.Fprintf(dockerCli.Out(), "  Election Tick: %d\n", info.Swarm.Cluster.Spec.Raft.ElectionTick)
 			fmt.Fprintf(dockerCli.Out(), " Dispatcher:\n")
@@ -124,6 +126,17 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 			}
 		}
 		fmt.Fprintf(dockerCli.Out(), " Node Address: %s\n", info.Swarm.NodeAddr)
+		managers := []string{}
+		for _, entry := range info.Swarm.RemoteManagers {
+			managers = append(managers, entry.Addr)
+		}
+		if len(managers) > 0 {
+			sort.Strings(managers)
+			fmt.Fprintf(dockerCli.Out(), " Manager Addresses:\n")
+			for _, entry := range managers {
+				fmt.Fprintf(dockerCli.Out(), "  %s\n", entry)
+			}
+		}
 	}
 
 	if len(info.Runtimes) > 0 {
@@ -136,9 +149,46 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 	}
 
 	if info.OSType == "linux" {
-		fmt.Fprintf(dockerCli.Out(), "Security Options:")
-		ioutils.FprintfIfNotEmpty(dockerCli.Out(), " %s", strings.Join(info.SecurityOptions, " "))
-		fmt.Fprintf(dockerCli.Out(), "\n")
+		fmt.Fprintf(dockerCli.Out(), "Init Binary: %v\n", info.InitBinary)
+
+		for _, ci := range []struct {
+			Name   string
+			Commit types.Commit
+		}{
+			{"containerd", info.ContainerdCommit},
+			{"runc", info.RuncCommit},
+			{"init", info.InitCommit},
+		} {
+			fmt.Fprintf(dockerCli.Out(), "%s version: %s", ci.Name, ci.Commit.ID)
+			if ci.Commit.ID != ci.Commit.Expected {
+				fmt.Fprintf(dockerCli.Out(), " (expected: %s)", ci.Commit.Expected)
+			}
+			fmt.Fprintf(dockerCli.Out(), "\n")
+		}
+		if len(info.SecurityOptions) != 0 {
+			kvs, err := types.DecodeSecurityOptions(info.SecurityOptions)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(dockerCli.Out(), "Security Options:\n")
+			for _, so := range kvs {
+				fmt.Fprintf(dockerCli.Out(), " %s\n", so.Name)
+				for _, o := range so.Options {
+					switch o.Key {
+					case "profile":
+						if o.Value != "default" {
+							fmt.Fprintf(dockerCli.Err(), "  WARNING: You're not using the default seccomp profile\n")
+						}
+						fmt.Fprintf(dockerCli.Out(), "  Profile: %s\n", o.Value)
+					}
+				}
+			}
+		}
+	}
+
+	// Isolation only has meaning on a Windows daemon.
+	if info.OSType == "windows" {
+		fmt.Fprintf(dockerCli.Out(), "Default Isolation: %v\n", info.Isolation)
 	}
 
 	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Kernel Version: %s\n", info.KernelVersion)
@@ -150,7 +200,7 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "Name: %s\n", info.Name)
 	ioutils.FprintfIfNotEmpty(dockerCli.Out(), "ID: %s\n", info.ID)
 	fmt.Fprintf(dockerCli.Out(), "Docker Root Dir: %s\n", info.DockerRootDir)
-	fmt.Fprintf(dockerCli.Out(), "Debug Mode (client): %v\n", utils.IsDebugEnabled())
+	fmt.Fprintf(dockerCli.Out(), "Debug Mode (client): %v\n", debug.IsEnabled())
 	fmt.Fprintf(dockerCli.Out(), "Debug Mode (server): %v\n", info.Debug)
 
 	if info.Debug {
@@ -172,8 +222,64 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 		fmt.Fprintf(dockerCli.Out(), "Registry: %v\n", info.IndexServerAddress)
 	}
 
+	if info.Labels != nil {
+		fmt.Fprintln(dockerCli.Out(), "Labels:")
+		for _, attribute := range info.Labels {
+			fmt.Fprintf(dockerCli.Out(), " %s\n", attribute)
+		}
+		// TODO: Engine labels with duplicate keys has been deprecated in 1.13 and will be error out
+		// after 3 release cycles (17.12). For now, a WARNING will be generated. The following will
+		// be removed eventually.
+		labelMap := map[string]string{}
+		for _, label := range info.Labels {
+			stringSlice := strings.SplitN(label, "=", 2)
+			if len(stringSlice) > 1 {
+				// If there is a conflict we will throw out a warning
+				if v, ok := labelMap[stringSlice[0]]; ok && v != stringSlice[1] {
+					fmt.Fprintln(dockerCli.Err(), "WARNING: labels with duplicate keys and conflicting values have been deprecated")
+					break
+				}
+				labelMap[stringSlice[0]] = stringSlice[1]
+			}
+		}
+	}
+
+	fmt.Fprintf(dockerCli.Out(), "Experimental: %v\n", info.ExperimentalBuild)
+	if info.ClusterStore != "" {
+		fmt.Fprintf(dockerCli.Out(), "Cluster Store: %s\n", info.ClusterStore)
+	}
+
+	if info.ClusterAdvertise != "" {
+		fmt.Fprintf(dockerCli.Out(), "Cluster Advertise: %s\n", info.ClusterAdvertise)
+	}
+
+	if info.RegistryConfig != nil && (len(info.RegistryConfig.InsecureRegistryCIDRs) > 0 || len(info.RegistryConfig.IndexConfigs) > 0) {
+		fmt.Fprintln(dockerCli.Out(), "Insecure Registries:")
+		for _, registry := range info.RegistryConfig.IndexConfigs {
+			if registry.Secure == false {
+				fmt.Fprintf(dockerCli.Out(), " %s\n", registry.Name)
+			}
+		}
+
+		for _, registry := range info.RegistryConfig.InsecureRegistryCIDRs {
+			mask, _ := registry.Mask.Size()
+			fmt.Fprintf(dockerCli.Out(), " %s/%d\n", registry.IP.String(), mask)
+		}
+	}
+
+	if info.RegistryConfig != nil && len(info.RegistryConfig.Mirrors) > 0 {
+		fmt.Fprintln(dockerCli.Out(), "Registry Mirrors:")
+		for _, mirror := range info.RegistryConfig.Mirrors {
+			fmt.Fprintf(dockerCli.Out(), " %s\n", mirror)
+		}
+	}
+
+	fmt.Fprintf(dockerCli.Out(), "Live Restore Enabled: %v\n\n", info.LiveRestoreEnabled)
+
 	// Only output these warnings if the server does not support these features
 	if info.OSType != "windows" {
+		printStorageDriverWarnings(dockerCli, info)
+
 		if !info.MemoryLimit {
 			fmt.Fprintln(dockerCli.Err(), "WARNING: No memory limit support")
 		}
@@ -209,46 +315,42 @@ func prettyPrintInfo(dockerCli *command.DockerCli, info types.Info) error {
 		}
 	}
 
-	if info.Labels != nil {
-		fmt.Fprintln(dockerCli.Out(), "Labels:")
-		for _, attribute := range info.Labels {
-			fmt.Fprintf(dockerCli.Out(), " %s\n", attribute)
-		}
-	}
-
-	ioutils.FprintfIfTrue(dockerCli.Out(), "Experimental: %v\n", info.ExperimentalBuild)
-	if info.ClusterStore != "" {
-		fmt.Fprintf(dockerCli.Out(), "Cluster Store: %s\n", info.ClusterStore)
-	}
-
-	if info.ClusterAdvertise != "" {
-		fmt.Fprintf(dockerCli.Out(), "Cluster Advertise: %s\n", info.ClusterAdvertise)
-	}
-
-	if info.RegistryConfig != nil && (len(info.RegistryConfig.InsecureRegistryCIDRs) > 0 || len(info.RegistryConfig.IndexConfigs) > 0) {
-		fmt.Fprintln(dockerCli.Out(), "Insecure Registries:")
-		for _, registry := range info.RegistryConfig.IndexConfigs {
-			if registry.Secure == false {
-				fmt.Fprintf(dockerCli.Out(), " %s\n", registry.Name)
-			}
-		}
-
-		for _, registry := range info.RegistryConfig.InsecureRegistryCIDRs {
-			mask, _ := registry.Mask.Size()
-			fmt.Fprintf(dockerCli.Out(), " %s/%d\n", registry.IP.String(), mask)
-		}
-	}
-
-	if info.RegistryConfig != nil && len(info.RegistryConfig.Mirrors) > 0 {
-		fmt.Fprintln(dockerCli.Out(), "Registry Mirrors:")
-		for _, mirror := range info.RegistryConfig.Mirrors {
-			fmt.Fprintf(dockerCli.Out(), " %s\n", mirror)
-		}
-	}
-
-	fmt.Fprintf(dockerCli.Out(), "Live Restore Enabled: %v\n", info.LiveRestoreEnabled)
-
 	return nil
+}
+
+func printStorageDriverWarnings(dockerCli *command.DockerCli, info types.Info) {
+	if info.DriverStatus == nil {
+		return
+	}
+
+	for _, pair := range info.DriverStatus {
+		if pair[0] == "Data loop file" {
+			fmt.Fprintf(dockerCli.Err(), "WARNING: %s: usage of loopback devices is strongly discouraged for production use.\n         Use `--storage-opt dm.thinpooldev` to specify a custom block storage device.\n", info.Driver)
+		}
+		if pair[0] == "Supports d_type" && pair[1] == "false" {
+			backingFs := getBackingFs(info)
+
+			msg := fmt.Sprintf("WARNING: %s: the backing %s filesystem is formatted without d_type support, which leads to incorrect behavior.\n", info.Driver, backingFs)
+			if backingFs == "xfs" {
+				msg += "         Reformat the filesystem with ftype=1 to enable d_type support.\n"
+			}
+			msg += "         Running without d_type support will not be supported in future releases."
+			fmt.Fprintln(dockerCli.Err(), msg)
+		}
+	}
+}
+
+func getBackingFs(info types.Info) string {
+	if info.DriverStatus == nil {
+		return ""
+	}
+
+	for _, pair := range info.DriverStatus {
+		if pair[0] == "Backing Filesystem" {
+			return pair[1]
+		}
+	}
+	return ""
 }
 
 func formatInfo(dockerCli *command.DockerCli, info types.Info, format string) error {

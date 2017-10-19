@@ -2,17 +2,11 @@ package libcontainerd
 
 import (
 	"github.com/Microsoft/hcsshim"
-	"github.com/docker/docker/libcontainerd/windowsoci"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
-// Spec is the base configuration for the container.
-type Spec windowsoci.Spec
-
 // Process contains information to start a specific application inside the container.
-type Process windowsoci.Process
-
-// User specifies user information for the containers main process.
-type User windowsoci.User
+type Process specs.Process
 
 // Summary contains a ProcessList item from HCS to support `top`
 type Summary hcsshim.ProcessListItem
@@ -22,11 +16,10 @@ type StateInfo struct {
 	CommonStateInfo
 
 	// Platform specific StateInfo
-
 	UpdatePending bool // Indicates that there are some update operations pending that should be completed by a servicing container.
 }
 
-// Stats contains statics from HCS
+// Stats contains statistics from HCS
 type Stats hcsshim.Statistics
 
 // Resources defines updatable container resource values.
@@ -55,7 +48,7 @@ type HyperVIsolationOption struct {
 // LayerOption is a CreateOption that indicates to the runtime the layer folder
 // and layer paths for a container.
 type LayerOption struct {
-	// LayerFolder is the path to the current layer folder. Empty for Hyper-V containers.
+	// LayerFolderPath is the path to the current layer folder. Empty for Hyper-V containers.
 	LayerFolderPath string `json:",omitempty"`
 	// Layer paths of the parent layers
 	LayerPaths []string
@@ -66,6 +59,14 @@ type LayerOption struct {
 type NetworkEndpointsOption struct {
 	Endpoints                []string
 	AllowUnqualifiedDNSQuery bool
+	DNSSearchList            []string
+	NetworkSharedContainerID string
+}
+
+// CredentialsOption is a CreateOption that indicates the credentials from
+// a credential spec to be used to the runtime
+type CredentialsOption struct {
+	Credentials string
 }
 
 // Checkpoint holds the details of a checkpoint (not supported in windows)

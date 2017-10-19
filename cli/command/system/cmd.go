@@ -1,8 +1,6 @@
 package system
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/docker/docker/cli"
@@ -15,13 +13,14 @@ func NewSystemCommand(dockerCli *command.DockerCli) *cobra.Command {
 		Use:   "system",
 		Short: "Manage Docker",
 		Args:  cli.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Fprintf(dockerCli.Err(), "\n"+cmd.UsageString())
-		},
+		RunE:  dockerCli.ShowHelp,
 	}
 	cmd.AddCommand(
 		NewEventsCommand(dockerCli),
 		NewInfoCommand(dockerCli),
+		NewDiskUsageCommand(dockerCli),
+		NewPruneCommand(dockerCli),
 	)
+
 	return cmd
 }

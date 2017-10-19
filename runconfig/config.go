@@ -7,6 +7,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	networktypes "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/volume"
 )
 
@@ -47,45 +48,44 @@ func DecodeContainerConfig(src io.Reader) (*container.Config, *container.HostCon
 		}
 
 		// Now validate all the volumes and binds
-		if err := validateVolumesAndBindSettings(w.Config, hc); err != nil {
+		if err := validateMountSettings(w.Config, hc); err != nil {
 			return nil, nil, nil, err
 		}
 	}
 
 	// Certain parameters need daemon-side validation that cannot be done
 	// on the client, as only the daemon knows what is valid for the platform.
-	if err := ValidateNetMode(w.Config, hc); err != nil {
+	if err := validateNetMode(w.Config, hc); err != nil {
 		return nil, nil, nil, err
 	}
 
 	// Validate isolation
-	if err := ValidateIsolation(hc); err != nil {
+	if err := validateIsolation(hc); err != nil {
 		return nil, nil, nil, err
 	}
 
 	// Validate QoS
-	if err := ValidateQoS(hc); err != nil {
+	if err := validateQoS(hc); err != nil {
 		return nil, nil, nil, err
 	}
+
+	// Validate Resources
+	if err := validateResources(hc, sysinfo.New(true)); err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Validate Privileged
+	if err := validatePrivileged(hc); err != nil {
+		return nil, nil, nil, err
+	}
+
 	return w.Config, hc, w.NetworkingConfig, nil
 }
 
-// validateVolumesAndBindSettings validates each of the volumes and bind settings
+// validateMountSettings validates each of the volumes and bind settings
 // passed by the caller to ensure they are valid.
-func validateVolumesAndBindSettings(c *container.Config, hc *container.HostConfig) error {
-	if len(hc.Mounts) > 0 {
-		if len(hc.Binds) > 0 {
-			return conflictError(fmt.Errorf("must not specify both Binds and Mounts"))
-		}
-
-		if len(c.Volumes) > 0 {
-			return conflictError(fmt.Errorf("must not specify both Volumes and Mounts"))
-		}
-
-		if len(hc.VolumeDriver) > 0 {
-			return conflictError(fmt.Errorf("must not specify both VolumeDriver and Mounts"))
-		}
-	}
+func validateMountSettings(c *container.Config, hc *container.HostConfig) error {
+	// it is ok to have len(hc.Mounts) > 0 && (len(hc.Binds) > 0 || len (c.Volumes) > 0 || len (hc.Tmpfs) > 0 )
 
 	// Ensure all volumes and binds are valid.
 	for spec := range c.Volumes {

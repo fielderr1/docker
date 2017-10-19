@@ -2,6 +2,7 @@ package formatter
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -21,22 +22,20 @@ func TestContainerPsContext(t *testing.T) {
 		container types.Container
 		trunc     bool
 		expValue  string
-		expHeader string
 		call      func() string
 	}{
-		{types.Container{ID: containerID}, true, stringid.TruncateID(containerID), containerIDHeader, ctx.ID},
-		{types.Container{ID: containerID}, false, containerID, containerIDHeader, ctx.ID},
-		{types.Container{Names: []string{"/foobar_baz"}}, true, "foobar_baz", namesHeader, ctx.Names},
-		{types.Container{Image: "ubuntu"}, true, "ubuntu", imageHeader, ctx.Image},
-		{types.Container{Image: "verylongimagename"}, true, "verylongimagename", imageHeader, ctx.Image},
-		{types.Container{Image: "verylongimagename"}, false, "verylongimagename", imageHeader, ctx.Image},
+		{types.Container{ID: containerID}, true, stringid.TruncateID(containerID), ctx.ID},
+		{types.Container{ID: containerID}, false, containerID, ctx.ID},
+		{types.Container{Names: []string{"/foobar_baz"}}, true, "foobar_baz", ctx.Names},
+		{types.Container{Image: "ubuntu"}, true, "ubuntu", ctx.Image},
+		{types.Container{Image: "verylongimagename"}, true, "verylongimagename", ctx.Image},
+		{types.Container{Image: "verylongimagename"}, false, "verylongimagename", ctx.Image},
 		{types.Container{
 			Image:   "a5a665ff33eced1e0803148700880edab4",
 			ImageID: "a5a665ff33eced1e0803148700880edab4269067ed77e27737a708d0d293fbf5",
 		},
 			true,
 			"a5a665ff33ec",
-			imageHeader,
 			ctx.Image,
 		},
 		{types.Container{
@@ -45,19 +44,18 @@ func TestContainerPsContext(t *testing.T) {
 		},
 			false,
 			"a5a665ff33eced1e0803148700880edab4",
-			imageHeader,
 			ctx.Image,
 		},
-		{types.Container{Image: ""}, true, "<no image>", imageHeader, ctx.Image},
-		{types.Container{Command: "sh -c 'ls -la'"}, true, `"sh -c 'ls -la'"`, commandHeader, ctx.Command},
-		{types.Container{Created: unix}, true, time.Unix(unix, 0).String(), createdAtHeader, ctx.CreatedAt},
-		{types.Container{Ports: []types.Port{{PrivatePort: 8080, PublicPort: 8080, Type: "tcp"}}}, true, "8080/tcp", portsHeader, ctx.Ports},
-		{types.Container{Status: "RUNNING"}, true, "RUNNING", statusHeader, ctx.Status},
-		{types.Container{SizeRw: 10}, true, "10 B", sizeHeader, ctx.Size},
-		{types.Container{SizeRw: 10, SizeRootFs: 20}, true, "10 B (virtual 20 B)", sizeHeader, ctx.Size},
-		{types.Container{}, true, "", labelsHeader, ctx.Labels},
-		{types.Container{Labels: map[string]string{"cpu": "6", "storage": "ssd"}}, true, "cpu=6,storage=ssd", labelsHeader, ctx.Labels},
-		{types.Container{Created: unix}, true, "About a minute", runningForHeader, ctx.RunningFor},
+		{types.Container{Image: ""}, true, "<no image>", ctx.Image},
+		{types.Container{Command: "sh -c 'ls -la'"}, true, `"sh -c 'ls -la'"`, ctx.Command},
+		{types.Container{Created: unix}, true, time.Unix(unix, 0).String(), ctx.CreatedAt},
+		{types.Container{Ports: []types.Port{{PrivatePort: 8080, PublicPort: 8080, Type: "tcp"}}}, true, "8080/tcp", ctx.Ports},
+		{types.Container{Status: "RUNNING"}, true, "RUNNING", ctx.Status},
+		{types.Container{SizeRw: 10}, true, "10B", ctx.Size},
+		{types.Container{SizeRw: 10, SizeRootFs: 20}, true, "10B (virtual 20B)", ctx.Size},
+		{types.Container{}, true, "", ctx.Labels},
+		{types.Container{Labels: map[string]string{"cpu": "6", "storage": "ssd"}}, true, "cpu=6,storage=ssd", ctx.Labels},
+		{types.Container{Created: unix}, true, "About a minute ago", ctx.RunningFor},
 		{types.Container{
 			Mounts: []types.MountPoint{
 				{
@@ -66,7 +64,7 @@ func TestContainerPsContext(t *testing.T) {
 					Source: "/a/path",
 				},
 			},
-		}, true, "this-is-a-lo...", mountsHeader, ctx.Mounts},
+		}, true, "this-is-a-lo...", ctx.Mounts},
 		{types.Container{
 			Mounts: []types.MountPoint{
 				{
@@ -74,7 +72,7 @@ func TestContainerPsContext(t *testing.T) {
 					Source: "/a/path",
 				},
 			},
-		}, false, "/a/path", mountsHeader, ctx.Mounts},
+		}, false, "/a/path", ctx.Mounts},
 		{types.Container{
 			Mounts: []types.MountPoint{
 				{
@@ -83,7 +81,7 @@ func TestContainerPsContext(t *testing.T) {
 					Source: "/a/path",
 				},
 			},
-		}, false, "733908409c91817de8e92b0096373245f329f19a88e2c849f02460e9b3d1c203", mountsHeader, ctx.Mounts},
+		}, false, "733908409c91817de8e92b0096373245f329f19a88e2c849f02460e9b3d1c203", ctx.Mounts},
 	}
 
 	for _, c := range cases {
@@ -93,11 +91,6 @@ func TestContainerPsContext(t *testing.T) {
 			compareMultipleValues(t, v, c.expValue)
 		} else if v != c.expValue {
 			t.Fatalf("Expected %s, was %s\n", c.expValue, v)
-		}
-
-		h := ctx.FullHeader()
-		if h != c.expHeader {
-			t.Fatalf("Expected %s, was %s\n", c.expHeader, h)
 		}
 	}
 
@@ -114,12 +107,6 @@ func TestContainerPsContext(t *testing.T) {
 		t.Fatalf("Expected ubuntu, was %s\n", node)
 	}
 
-	h := ctx.FullHeader()
-	if h != "SWARM ID\tNODE NAME" {
-		t.Fatalf("Expected %s, was %s\n", "SWARM ID\tNODE NAME", h)
-
-	}
-
 	c2 := types.Container{}
 	ctx = containerContext{c: c2, trunc: true}
 
@@ -127,13 +114,6 @@ func TestContainerPsContext(t *testing.T) {
 	if label != "" {
 		t.Fatalf("Expected an empty string, was %s", label)
 	}
-
-	ctx = containerContext{c: c2, trunc: true}
-	FullHeader := ctx.FullHeader()
-	if FullHeader != "" {
-		t.Fatalf("Expected FullHeader to be empty, was %s", FullHeader)
-	}
-
 }
 
 func TestContainerContextWrite(t *testing.T) {
@@ -159,8 +139,8 @@ func TestContainerContextWrite(t *testing.T) {
 		{
 			Context{Format: NewContainerFormat("table", false, true)},
 			`CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES               SIZE
-containerID1        ubuntu              ""                  24 hours ago                                                foobar_baz          0 B
-containerID2        ubuntu              ""                  24 hours ago                                                foobar_bar          0 B
+containerID1        ubuntu              ""                  24 hours ago                                                foobar_baz          0B
+containerID2        ubuntu              ""                  24 hours ago                                                foobar_bar          0B
 `,
 		},
 		{
@@ -219,7 +199,7 @@ status:
 names: foobar_baz
 labels:
 ports:
-size: 0 B
+size: 0B
 
 container_id: containerID2
 image: ubuntu
@@ -229,7 +209,7 @@ status:
 names: foobar_bar
 labels:
 ports:
-size: 0 B
+size: 0B
 
 `, expectedTime, expectedTime),
 		},
@@ -245,6 +225,14 @@ size: 0 B
 		{
 			Context{Format: NewContainerFormat("{{.Image}}", false, true)},
 			"ubuntu\nubuntu\n",
+		},
+		// Special headers for customerized table format
+		{
+			Context{Format: NewContainerFormat(`table {{truncate .ID 5}}\t{{json .Image}} {{.RunningFor}}/{{title .Status}}/{{pad .Ports 2 2}}.{{upper .Names}} {{lower .Status}}`, false, true)},
+			`CONTAINER ID        IMAGE CREATED/STATUS/  PORTS  .NAMES STATUS
+conta               "ubuntu" 24 hours ago//.FOOBAR_BAZ 
+conta               "ubuntu" 24 hours ago//.FOOBAR_BAR 
+`,
 		},
 	}
 
@@ -321,5 +309,77 @@ func TestContainerContextWriteWithNoContainers(t *testing.T) {
 		assert.Equal(t, context.expected, out.String())
 		// Clean buffer
 		out.Reset()
+	}
+}
+
+func TestContainerContextWriteJSON(t *testing.T) {
+	unix := time.Now().Add(-65 * time.Second).Unix()
+	containers := []types.Container{
+		{ID: "containerID1", Names: []string{"/foobar_baz"}, Image: "ubuntu", Created: unix},
+		{ID: "containerID2", Names: []string{"/foobar_bar"}, Image: "ubuntu", Created: unix},
+	}
+	expectedCreated := time.Unix(unix, 0).String()
+	expectedJSONs := []map[string]interface{}{
+		{"Command": "\"\"", "CreatedAt": expectedCreated, "ID": "containerID1", "Image": "ubuntu", "Labels": "", "LocalVolumes": "0", "Mounts": "", "Names": "foobar_baz", "Networks": "", "Ports": "", "RunningFor": "About a minute ago", "Size": "0B", "Status": ""},
+		{"Command": "\"\"", "CreatedAt": expectedCreated, "ID": "containerID2", "Image": "ubuntu", "Labels": "", "LocalVolumes": "0", "Mounts": "", "Names": "foobar_bar", "Networks": "", "Ports": "", "RunningFor": "About a minute ago", "Size": "0B", "Status": ""},
+	}
+	out := bytes.NewBufferString("")
+	err := ContainerWrite(Context{Format: "{{json .}}", Output: out}, containers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		t.Logf("Output: line %d: %s", i, line)
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		assert.DeepEqual(t, m, expectedJSONs[i])
+	}
+}
+
+func TestContainerContextWriteJSONField(t *testing.T) {
+	containers := []types.Container{
+		{ID: "containerID1", Names: []string{"/foobar_baz"}, Image: "ubuntu"},
+		{ID: "containerID2", Names: []string{"/foobar_bar"}, Image: "ubuntu"},
+	}
+	out := bytes.NewBufferString("")
+	err := ContainerWrite(Context{Format: "{{json .ID}}", Output: out}, containers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		t.Logf("Output: line %d: %s", i, line)
+		var s string
+		if err := json.Unmarshal([]byte(line), &s); err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, s, containers[i].ID)
+	}
+}
+
+func TestContainerBackCompat(t *testing.T) {
+	containers := []types.Container{{ID: "brewhaha"}}
+	cases := []string{
+		"ID",
+		"Names",
+		"Image",
+		"Command",
+		"CreatedAt",
+		"RunningFor",
+		"Ports",
+		"Status",
+		"Size",
+		"Labels",
+		"Mounts",
+	}
+	buf := bytes.NewBuffer(nil)
+	for _, c := range cases {
+		ctx := Context{Format: Format(fmt.Sprintf("{{ .%s }}", c)), Output: buf}
+		if err := ContainerWrite(ctx, containers); err != nil {
+			t.Logf("could not render template for field '%s': %v", c, err)
+			t.Fail()
+		}
+		buf.Reset()
 	}
 }

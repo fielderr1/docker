@@ -2,6 +2,7 @@ package formatter
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -17,27 +18,26 @@ func TestVolumeContext(t *testing.T) {
 	cases := []struct {
 		volumeCtx volumeContext
 		expValue  string
-		expHeader string
 		call      func() string
 	}{
 		{volumeContext{
 			v: types.Volume{Name: volumeName},
-		}, volumeName, nameHeader, ctx.Name},
+		}, volumeName, ctx.Name},
 		{volumeContext{
 			v: types.Volume{Driver: "driver_name"},
-		}, "driver_name", driverHeader, ctx.Driver},
+		}, "driver_name", ctx.Driver},
 		{volumeContext{
 			v: types.Volume{Scope: "local"},
-		}, "local", scopeHeader, ctx.Scope},
+		}, "local", ctx.Scope},
 		{volumeContext{
 			v: types.Volume{Mountpoint: "mountpoint"},
-		}, "mountpoint", mountpointHeader, ctx.Mountpoint},
+		}, "mountpoint", ctx.Mountpoint},
 		{volumeContext{
 			v: types.Volume{},
-		}, "", labelsHeader, ctx.Labels},
+		}, "", ctx.Labels},
 		{volumeContext{
 			v: types.Volume{Labels: map[string]string{"label1": "value1", "label2": "value2"}},
-		}, "label1=value1,label2=value2", labelsHeader, ctx.Labels},
+		}, "label1=value1,label2=value2", ctx.Labels},
 	}
 
 	for _, c := range cases {
@@ -47,11 +47,6 @@ func TestVolumeContext(t *testing.T) {
 			compareMultipleValues(t, v, c.expValue)
 		} else if v != c.expValue {
 			t.Fatalf("Expected %s, was %s\n", c.expValue, v)
-		}
-
-		h := ctx.FullHeader()
-		if h != c.expHeader {
-			t.Fatalf("Expected %s, was %s\n", c.expHeader, h)
 		}
 	}
 }
@@ -76,7 +71,7 @@ func TestVolumeContextWrite(t *testing.T) {
 		// Table format
 		{
 			Context{Format: NewVolumeFormat("table", false)},
-			`DRIVER              NAME
+			`DRIVER              VOLUME NAME
 foo                 foobar_baz
 bar                 foobar_bar
 `,
@@ -89,14 +84,14 @@ foobar_bar
 		},
 		{
 			Context{Format: NewVolumeFormat("table {{.Name}}", false)},
-			`NAME
+			`VOLUME NAME
 foobar_baz
 foobar_bar
 `,
 		},
 		{
 			Context{Format: NewVolumeFormat("table {{.Name}}", true)},
-			`NAME
+			`VOLUME NAME
 foobar_baz
 foobar_bar
 `,
@@ -140,5 +135,49 @@ foobar_bar
 		} else {
 			assert.Equal(t, out.String(), testcase.expected)
 		}
+	}
+}
+
+func TestVolumeContextWriteJSON(t *testing.T) {
+	volumes := []*types.Volume{
+		{Driver: "foo", Name: "foobar_baz"},
+		{Driver: "bar", Name: "foobar_bar"},
+	}
+	expectedJSONs := []map[string]interface{}{
+		{"Driver": "foo", "Labels": "", "Links": "N/A", "Mountpoint": "", "Name": "foobar_baz", "Scope": "", "Size": "N/A"},
+		{"Driver": "bar", "Labels": "", "Links": "N/A", "Mountpoint": "", "Name": "foobar_bar", "Scope": "", "Size": "N/A"},
+	}
+	out := bytes.NewBufferString("")
+	err := VolumeWrite(Context{Format: "{{json .}}", Output: out}, volumes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		t.Logf("Output: line %d: %s", i, line)
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		assert.DeepEqual(t, m, expectedJSONs[i])
+	}
+}
+
+func TestVolumeContextWriteJSONField(t *testing.T) {
+	volumes := []*types.Volume{
+		{Driver: "foo", Name: "foobar_baz"},
+		{Driver: "bar", Name: "foobar_bar"},
+	}
+	out := bytes.NewBufferString("")
+	err := VolumeWrite(Context{Format: "{{json .Name}}", Output: out}, volumes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		t.Logf("Output: line %d: %s", i, line)
+		var s string
+		if err := json.Unmarshal([]byte(line), &s); err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, s, volumes[i].Name)
 	}
 }

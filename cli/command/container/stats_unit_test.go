@@ -6,9 +6,9 @@ import (
 	"github.com/docker/docker/api/types"
 )
 
-func TestCalculBlockIO(t *testing.T) {
+func TestCalculateBlockIO(t *testing.T) {
 	blkio := types.BlkioStats{
-		IoServiceBytesRecursive: []types.BlkioStatEntry{{8, 0, "read", 1234}, {8, 1, "read", 4567}, {8, 0, "write", 123}, {8, 1, "write", 456}},
+		IoServiceBytesRecursive: []types.BlkioStatEntry{{Major: 8, Minor: 0, Op: "read", Value: 1234}, {Major: 8, Minor: 1, Op: "read", Value: 4567}, {Major: 8, Minor: 0, Op: "write", Value: 123}, {Major: 8, Minor: 1, Op: "write", Value: 456}},
 	}
 	blkRead, blkWrite := calculateBlockIO(blkio)
 	if blkRead != 5801 {

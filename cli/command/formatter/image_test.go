@@ -18,44 +18,43 @@ func TestImageContext(t *testing.T) {
 
 	var ctx imageContext
 	cases := []struct {
-		imageCtx  imageContext
-		expValue  string
-		expHeader string
-		call      func() string
+		imageCtx imageContext
+		expValue string
+		call     func() string
 	}{
 		{imageContext{
-			i:     types.Image{ID: imageID},
+			i:     types.ImageSummary{ID: imageID},
 			trunc: true,
-		}, stringid.TruncateID(imageID), imageIDHeader, ctx.ID},
+		}, stringid.TruncateID(imageID), ctx.ID},
 		{imageContext{
-			i:     types.Image{ID: imageID},
+			i:     types.ImageSummary{ID: imageID},
 			trunc: false,
-		}, imageID, imageIDHeader, ctx.ID},
+		}, imageID, ctx.ID},
 		{imageContext{
-			i:     types.Image{Size: 10},
+			i:     types.ImageSummary{Size: 10, VirtualSize: 10},
 			trunc: true,
-		}, "10 B", sizeHeader, ctx.Size},
+		}, "10B", ctx.Size},
 		{imageContext{
-			i:     types.Image{Created: unix},
+			i:     types.ImageSummary{Created: unix},
 			trunc: true,
-		}, time.Unix(unix, 0).String(), createdAtHeader, ctx.CreatedAt},
+		}, time.Unix(unix, 0).String(), ctx.CreatedAt},
 		// FIXME
 		// {imageContext{
-		// 	i:     types.Image{Created: unix},
+		// 	i:     types.ImageSummary{Created: unix},
 		// 	trunc: true,
 		// }, units.HumanDuration(time.Unix(unix, 0)), createdSinceHeader, ctx.CreatedSince},
 		{imageContext{
-			i:    types.Image{},
+			i:    types.ImageSummary{},
 			repo: "busybox",
-		}, "busybox", repositoryHeader, ctx.Repository},
+		}, "busybox", ctx.Repository},
 		{imageContext{
-			i:   types.Image{},
+			i:   types.ImageSummary{},
 			tag: "latest",
-		}, "latest", tagHeader, ctx.Tag},
+		}, "latest", ctx.Tag},
 		{imageContext{
-			i:      types.Image{},
+			i:      types.ImageSummary{},
 			digest: "sha256:d149ab53f8718e987c3a3024bb8aa0e2caadf6c0328f1d9d850b2a2a67f2819a",
-		}, "sha256:d149ab53f8718e987c3a3024bb8aa0e2caadf6c0328f1d9d850b2a2a67f2819a", digestHeader, ctx.Digest},
+		}, "sha256:d149ab53f8718e987c3a3024bb8aa0e2caadf6c0328f1d9d850b2a2a67f2819a", ctx.Digest},
 	}
 
 	for _, c := range cases {
@@ -65,11 +64,6 @@ func TestImageContext(t *testing.T) {
 			compareMultipleValues(t, v, c.expValue)
 		} else if v != c.expValue {
 			t.Fatalf("Expected %s, was %s\n", c.expValue, v)
-		}
-
-		h := ctx.FullHeader()
-		if h != c.expHeader {
-			t.Fatalf("Expected %s, was %s\n", c.expHeader, h)
 		}
 	}
 }
@@ -109,9 +103,9 @@ func TestImageContextWrite(t *testing.T) {
 				},
 			},
 			`REPOSITORY          TAG                 IMAGE ID            CREATED             SIZE
-image               tag1                imageID1            24 hours ago        0 B
-image               tag2                imageID2            24 hours ago        0 B
-<none>              <none>              imageID3            24 hours ago        0 B
+image               tag1                imageID1            24 hours ago        0B
+image               tag2                imageID2            24 hours ago        0B
+<none>              <none>              imageID3            24 hours ago        0B
 `,
 		},
 		{
@@ -159,9 +153,9 @@ image               <none>
 				Digest: true,
 			},
 			`REPOSITORY          TAG                 DIGEST                                                                    IMAGE ID            CREATED             SIZE
-image               tag1                sha256:cbbf2f9a99b47fc460d422812b6a5adff7dfee951d8fa2e4a98caa0382cfbdbf   imageID1            24 hours ago        0 B
-image               tag2                <none>                                                                    imageID2            24 hours ago        0 B
-<none>              <none>              <none>                                                                    imageID3            24 hours ago        0 B
+image               tag1                sha256:cbbf2f9a99b47fc460d422812b6a5adff7dfee951d8fa2e4a98caa0382cfbdbf   imageID1            24 hours ago        0B
+image               tag2                <none>                                                                    imageID2            24 hours ago        0B
+<none>              <none>              <none>                                                                    imageID3            24 hours ago        0B
 `,
 		},
 		{
@@ -184,19 +178,19 @@ image               tag2                <none>                                  
 tag: tag1
 image_id: imageID1
 created_at: %s
-virtual_size: 0 B
+virtual_size: 0B
 
 repository: image
 tag: tag2
 image_id: imageID2
 created_at: %s
-virtual_size: 0 B
+virtual_size: 0B
 
 repository: <none>
 tag: <none>
 image_id: imageID3
 created_at: %s
-virtual_size: 0 B
+virtual_size: 0B
 
 `, expectedTime, expectedTime, expectedTime),
 		},
@@ -212,21 +206,21 @@ tag: tag1
 digest: sha256:cbbf2f9a99b47fc460d422812b6a5adff7dfee951d8fa2e4a98caa0382cfbdbf
 image_id: imageID1
 created_at: %s
-virtual_size: 0 B
+virtual_size: 0B
 
 repository: image
 tag: tag2
 digest: <none>
 image_id: imageID2
 created_at: %s
-virtual_size: 0 B
+virtual_size: 0B
 
 repository: <none>
 tag: <none>
 digest: <none>
 image_id: imageID3
 created_at: %s
-virtual_size: 0 B
+virtual_size: 0B
 
 `, expectedTime, expectedTime, expectedTime),
 		},
@@ -262,7 +256,7 @@ image_id: imageID3
 	}
 
 	for _, testcase := range cases {
-		images := []types.Image{
+		images := []types.ImageSummary{
 			{ID: "imageID1", RepoTags: []string{"image:tag1"}, RepoDigests: []string{"image@sha256:cbbf2f9a99b47fc460d422812b6a5adff7dfee951d8fa2e4a98caa0382cfbdbf"}, Created: unixTime},
 			{ID: "imageID2", RepoTags: []string{"image:tag2"}, Created: unixTime},
 			{ID: "imageID3", RepoTags: []string{"<none>:<none>"}, RepoDigests: []string{"<none>@<none>"}, Created: unixTime},
@@ -280,7 +274,7 @@ image_id: imageID3
 
 func TestImageContextWriteWithNoImage(t *testing.T) {
 	out := bytes.NewBufferString("")
-	images := []types.Image{}
+	images := []types.ImageSummary{}
 
 	contexts := []struct {
 		context  ImageContext

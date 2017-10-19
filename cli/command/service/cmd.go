@@ -1,8 +1,6 @@
 package service
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/docker/docker/cli"
@@ -15,9 +13,8 @@ func NewServiceCommand(dockerCli *command.DockerCli) *cobra.Command {
 		Use:   "service",
 		Short: "Manage services",
 		Args:  cli.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Fprintf(dockerCli.Err(), "\n"+cmd.UsageString())
-		},
+		RunE:  dockerCli.ShowHelp,
+		Tags:  map[string]string{"version": "1.24"},
 	}
 	cmd.AddCommand(
 		newCreateCommand(dockerCli),
@@ -27,6 +24,7 @@ func NewServiceCommand(dockerCli *command.DockerCli) *cobra.Command {
 		newRemoveCommand(dockerCli),
 		newScaleCommand(dockerCli),
 		newUpdateCommand(dockerCli),
+		newLogsCommand(dockerCli),
 	)
 	return cmd
 }

@@ -10,31 +10,52 @@ import (
 	"github.com/docker/docker/cli"
 	"github.com/docker/docker/cli/command"
 	"github.com/docker/docker/dockerversion"
-	"github.com/docker/docker/utils"
-	"github.com/docker/docker/utils/templates"
+	"github.com/docker/docker/pkg/templates"
 	"github.com/spf13/cobra"
 )
 
 var versionTemplate = `Client:
  Version:      {{.Client.Version}}
- API version:  {{.Client.APIVersion}}
+ API version:  {{.Client.APIVersion}}{{if ne .Client.APIVersion .Client.DefaultAPIVersion}} (downgraded from {{.Client.DefaultAPIVersion}}){{end}}
  Go version:   {{.Client.GoVersion}}
  Git commit:   {{.Client.GitCommit}}
  Built:        {{.Client.BuildTime}}
- OS/Arch:      {{.Client.Os}}/{{.Client.Arch}}{{if .Client.Experimental}}
- Experimental: {{.Client.Experimental}}{{end}}{{if .ServerOK}}
+ OS/Arch:      {{.Client.Os}}/{{.Client.Arch}}{{if .ServerOK}}
 
 Server:
  Version:      {{.Server.Version}}
- API version:  {{.Server.APIVersion}}
+ API version:  {{.Server.APIVersion}} (minimum version {{.Server.MinAPIVersion}})
  Go version:   {{.Server.GoVersion}}
  Git commit:   {{.Server.GitCommit}}
  Built:        {{.Server.BuildTime}}
- OS/Arch:      {{.Server.Os}}/{{.Server.Arch}}{{if .Server.Experimental}}
- Experimental: {{.Server.Experimental}}{{end}}{{end}}`
+ OS/Arch:      {{.Server.Os}}/{{.Server.Arch}}
+ Experimental: {{.Server.Experimental}}{{end}}`
 
 type versionOptions struct {
 	format string
+}
+
+// versionInfo contains version information of both the Client, and Server
+type versionInfo struct {
+	Client clientVersion
+	Server *types.Version
+}
+
+type clientVersion struct {
+	Version           string
+	APIVersion        string `json:"ApiVersion"`
+	DefaultAPIVersion string `json:"DefaultAPIVersion,omitempty"`
+	GitCommit         string
+	GoVersion         string
+	Os                string
+	Arch              string
+	BuildTime         string `json:",omitempty"`
+}
+
+// ServerOK returns true when the client could connect to the docker server
+// and parse the information received. It returns false otherwise.
+func (v versionInfo) ServerOK() bool {
+	return v.Server != nil
 }
 
 // NewVersionCommand creates a new cobra.Command for `docker version`
@@ -52,7 +73,7 @@ func NewVersionCommand(dockerCli *command.DockerCli) *cobra.Command {
 
 	flags := cmd.Flags()
 
-	flags.StringVarP(&opts.format, "format", "f", "", "Format the output using the given go template")
+	flags.StringVarP(&opts.format, "format", "f", "", "Format the output using the given Go template")
 
 	return cmd
 }
@@ -71,16 +92,16 @@ func runVersion(dockerCli *command.DockerCli, opts *versionOptions) error {
 			Status: "Template parsing error: " + err.Error()}
 	}
 
-	vd := types.VersionResponse{
-		Client: &types.Version{
-			Version:      dockerversion.Version,
-			APIVersion:   dockerCli.Client().ClientVersion(),
-			GoVersion:    runtime.Version(),
-			GitCommit:    dockerversion.GitCommit,
-			BuildTime:    dockerversion.BuildTime,
-			Os:           runtime.GOOS,
-			Arch:         runtime.GOARCH,
-			Experimental: utils.ExperimentalBuild(),
+	vd := versionInfo{
+		Client: clientVersion{
+			Version:           dockerversion.Version,
+			APIVersion:        dockerCli.Client().ClientVersion(),
+			DefaultAPIVersion: dockerCli.DefaultVersion(),
+			GoVersion:         runtime.Version(),
+			GitCommit:         dockerversion.GitCommit,
+			BuildTime:         dockerversion.BuildTime,
+			Os:                runtime.GOOS,
+			Arch:              runtime.GOARCH,
 		},
 	}
 

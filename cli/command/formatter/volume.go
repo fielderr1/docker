@@ -5,13 +5,16 @@ import (
 	"strings"
 
 	"github.com/docker/docker/api/types"
+	units "github.com/docker/go-units"
 )
 
 const (
 	defaultVolumeQuietFormat = "{{.Name}}"
 	defaultVolumeTableFormat = "table {{.Driver}}\t{{.Name}}"
 
+	volumeNameHeader = "VOLUME NAME"
 	mountpointHeader = "MOUNTPOINT"
+	linksHeader      = "LINKS"
 	// Status header ?
 )
 
@@ -42,7 +45,17 @@ func VolumeWrite(ctx Context, volumes []*types.Volume) error {
 		}
 		return nil
 	}
-	return ctx.Write(&volumeContext{}, render)
+	return ctx.Write(newVolumeContext(), render)
+}
+
+type volumeHeaderContext map[string]string
+
+func (c volumeHeaderContext) Label(name string) string {
+	n := strings.Split(name, ".")
+	r := strings.NewReplacer("-", " ", "_", " ")
+	h := r.Replace(n[len(n)-1])
+
+	return h
 }
 
 type volumeContext struct {
@@ -50,28 +63,41 @@ type volumeContext struct {
 	v types.Volume
 }
 
+func newVolumeContext() *volumeContext {
+	volumeCtx := volumeContext{}
+	volumeCtx.header = volumeHeaderContext{
+		"Name":       volumeNameHeader,
+		"Driver":     driverHeader,
+		"Scope":      scopeHeader,
+		"Mountpoint": mountpointHeader,
+		"Labels":     labelsHeader,
+		"Links":      linksHeader,
+		"Size":       sizeHeader,
+	}
+	return &volumeCtx
+}
+
+func (c *volumeContext) MarshalJSON() ([]byte, error) {
+	return marshalJSON(c)
+}
+
 func (c *volumeContext) Name() string {
-	c.AddHeader(nameHeader)
 	return c.v.Name
 }
 
 func (c *volumeContext) Driver() string {
-	c.AddHeader(driverHeader)
 	return c.v.Driver
 }
 
 func (c *volumeContext) Scope() string {
-	c.AddHeader(scopeHeader)
 	return c.v.Scope
 }
 
 func (c *volumeContext) Mountpoint() string {
-	c.AddHeader(mountpointHeader)
 	return c.v.Mountpoint
 }
 
 func (c *volumeContext) Labels() string {
-	c.AddHeader(labelsHeader)
 	if c.v.Labels == nil {
 		return ""
 	}
@@ -84,15 +110,22 @@ func (c *volumeContext) Labels() string {
 }
 
 func (c *volumeContext) Label(name string) string {
-
-	n := strings.Split(name, ".")
-	r := strings.NewReplacer("-", " ", "_", " ")
-	h := r.Replace(n[len(n)-1])
-
-	c.AddHeader(h)
-
 	if c.v.Labels == nil {
 		return ""
 	}
 	return c.v.Labels[name]
+}
+
+func (c *volumeContext) Links() string {
+	if c.v.UsageData == nil {
+		return "N/A"
+	}
+	return fmt.Sprintf("%d", c.v.UsageData.RefCount)
+}
+
+func (c *volumeContext) Size() string {
+	if c.v.UsageData == nil {
+		return "N/A"
+	}
+	return units.HumanSize(float64(c.v.UsageData.Size))
 }

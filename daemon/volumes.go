@@ -7,13 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Sirupsen/logrus"
 	dockererrors "github.com/docker/docker/api/errors"
 	"github.com/docker/docker/api/types"
 	containertypes "github.com/docker/docker/api/types/container"
 	mounttypes "github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/volume"
-	"github.com/opencontainers/runc/libcontainer/label"
+	"github.com/docker/docker/volume/drivers"
 )
 
 var (
@@ -24,19 +25,18 @@ var (
 
 type mounts []container.Mount
 
-// volumeToAPIType converts a volume.Volume to the type used by the remote API
+// volumeToAPIType converts a volume.Volume to the type used by the Engine API
 func volumeToAPIType(v volume.Volume) *types.Volume {
 	tv := &types.Volume{
 		Name:   v.Name(),
 		Driver: v.DriverName(),
 	}
-	if v, ok := v.(volume.LabeledVolume); ok {
+	if v, ok := v.(volume.DetailedVolume); ok {
 		tv.Labels = v.Labels()
-	}
-
-	if v, ok := v.(volume.ScopedVolume); ok {
+		tv.Options = v.Options()
 		tv.Scope = v.Scope()
 	}
+
 	return tv
 }
 
@@ -84,6 +84,15 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 		}
 	}()
 
+	dereferenceIfExists := func(destination string) {
+		if v, ok := mountPoints[destination]; ok {
+			logrus.Debugf("Duplicate mount point '%s'", destination)
+			if v.Volume != nil {
+				daemon.volumes.Dereference(v.Volume, container.ID)
+			}
+		}
+	}
+
 	// 1. Read already configured mount points.
 	for destination, point := range container.MountPoints {
 		mountPoints[destination] = point
@@ -120,7 +129,7 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 				}
 				cp.Volume = v
 			}
-
+			dereferenceIfExists(cp.Destination)
 			mountPoints[cp.Destination] = cp
 		}
 	}
@@ -154,6 +163,7 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 		}
 
 		binds[bind.Destination] = true
+		dereferenceIfExists(bind.Destination)
 		mountPoints[bind.Destination] = bind
 	}
 
@@ -182,14 +192,11 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 				return err
 			}
 
-			if err := label.Relabel(mp.Source, container.MountLabel, false); err != nil {
-				return err
-			}
 			mp.Volume = v
 			mp.Name = v.Name()
 			mp.Driver = v.DriverName()
 
-			// only use the cached path here since getting the path is not neccessary right now and calling `Path()` may be slow
+			// only use the cached path here since getting the path is not necessary right now and calling `Path()` may be slow
 			if cv, ok := v.(interface {
 				CachedPath() string
 			}); ok {
@@ -198,6 +205,7 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 		}
 
 		binds[mp.Destination] = true
+		dereferenceIfExists(mp.Destination)
 		mountPoints[mp.Destination] = mp
 	}
 
@@ -241,7 +249,7 @@ func backportMountSpec(container *container.Container) error {
 			m.Type = mounttypes.TypeVolume
 			m.Spec.Type = mounttypes.TypeVolume
 
-			// make sure this is not an anyonmous volume before setting the spec source
+			// make sure this is not an anonymous volume before setting the spec source
 			if _, exists := container.Config.Volumes[target]; !exists {
 				m.Spec.Source = m.Name
 			}
@@ -273,4 +281,33 @@ func backportMountSpec(container *container.Container) error {
 		}
 	}
 	return container.ToDiskLocking()
+}
+
+func (daemon *Daemon) traverseLocalVolumes(fn func(volume.Volume) error) error {
+	localVolumeDriver, err := volumedrivers.GetDriver(volume.DefaultDriverName)
+	if err != nil {
+		return fmt.Errorf("can't retrieve local volume driver: %v", err)
+	}
+	vols, err := localVolumeDriver.List()
+	if err != nil {
+		return fmt.Errorf("can't retrieve local volumes: %v", err)
+	}
+
+	for _, v := range vols {
+		name := v.Name()
+		vol, err := daemon.volumes.Get(name)
+		if err != nil {
+			logrus.Warnf("failed to retrieve volume %s from store: %v", name, err)
+		} else {
+			// daemon.volumes.Get will return DetailedVolume
+			v = vol
+		}
+
+		err = fn(v)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
